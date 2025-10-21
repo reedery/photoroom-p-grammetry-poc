@@ -3,6 +3,7 @@
 Modal-based python backend for processing images
 
 Pipeline (TODO)
+
 - Images resized (todo) then uploaded (done)
 - Images aligned with sfm (todo)
 - Images BG removed (todo)
@@ -16,13 +17,20 @@ Pipeline (TODO)
 pip install -r backend/requirements.txt
 ```
 
-## Modal Commands
+### Create virtual environment
 
-### Deploy to production
+```bash
+python3 -m venv venv
+source venv/bin/activate
+```
+
+### Install dependencies
 
 ```bash
 modal deploy backend/app.py
 ```
+
+## Modal Commands
 
 ### Run in development (auto-reload)
 
