@@ -3,79 +3,93 @@ from pathlib import Path
 
 app = modal.App("photogrammetry-poc-backend")
 
-image = modal.Image.debian_slim(python_version="3.11").pip_install_from_requirements(
-    "backend/requirements.txt"
+# Create image and add pipeline.py to it
+image = (
+    modal.Image.debian_slim(python_version="3.11")
+    .pip_install_from_requirements("backend/requirements.txt")
+    .add_local_file("backend/pipeline.py", "/root/pipeline.py")
 )
+
+
+@app.function(image=image, cpu=2, memory=2048, timeout=300)
+def process_images(image_data: list[bytes]) -> dict:
+    from pathlib import Path
+    from pipeline import PhotogrammetryPipeline
+    
+    pipeline = PhotogrammetryPipeline(Path("/tmp/reconstruction"))
+    return pipeline.run_test_pipeline(image_data)
+
 
 @app.function(image=image)
 @modal.asgi_app()
-def upload_test():
+def web_app():
     from fastapi import FastAPI, UploadFile, File, Form, HTTPException
     from typing import List, Optional
     
-    web_app = FastAPI()
+    app = FastAPI()
     
-    @web_app.post("/")
-    async def upload_endpoint(
+    @app.post("/")
+    async def upload(
         files: List[UploadFile] = File(...),
         photoroom_api_key: Optional[str] = Form(None)
     ):
         if not files:
             raise HTTPException(status_code=400, detail="No files uploaded")
         
-        # Process files
+        image_data = []
         file_info = []
+        
         for file in files:
             content = await file.read()
+            image_data.append(content)
             file_info.append({
                 "filename": file.filename,
                 "size": len(content),
                 "content_type": file.content_type
             })
         
+        result = process_images.remote(image_data)
+        
         return {
             "status": "success",
             "files_received": len(files),
             "file_info": file_info,
-            "api_key_present": bool(photoroom_api_key)
+            "api_key_present": bool(photoroom_api_key),
+            "pipeline_result": result
         }
     
-    return web_app
+    return app
+
 
 @app.local_entrypoint()
-def main():
-    """Test the upload endpoint with a local image"""
+def test():
     import httpx
+    import json
     
-    # Try to find test images in the img_testing folder
-    img_testing_dir = Path(__file__).parent / "img_testing"
-    test_image_paths = list(img_testing_dir.glob("*.png"))
+    img_dir = Path(__file__).parent / "img_testing"
+    images = list(img_dir.glob("*.png"))[:3]
     
-    test_image = None
-    for img_path in test_image_paths:
-        if img_path.exists():
-            test_image = img_path
-            break
-    
-    if not test_image:
-        print("No test image found.")
+    if not images:
+        print("No test images found")
         return
     
-    print(f"Testing upload with: {test_image}")
-    print(f"Image size: {test_image.stat().st_size} bytes")
+    print(f"\nTesting with {len(images)} images:")
+    for img in images:
+        print(f"  - {img.name}")
     
-    # Get the deployed URL
-    upload_url = upload_test.web_url
-    print(f"Uploading to: {upload_url}")
+    files = [("files", (img.name, open(img, "rb"), "image/png")) for img in images]
+    data = {"photoroom_api_key": "test_key"}
     
-    # Test upload w dummy api key
-    with open(test_image, "rb") as f:
-        files = {"files": (test_image.name, f, "image/png")}
-        data = {"photoroom_api_key": "test_api_key_123"}
-        
-        response = httpx.post(upload_url, files=files, data=data)
-        
-    print(f"\nResponse status: {response.status_code}")
-    print(f"Response body: {response.json()}")
-    
-    return response.json()
+    try:
+        response = httpx.post(
+            web_app.get_web_url(),
+            files=files,
+            data=data,
+            timeout=60.0
+        )
+        print(f"\nStatus: {response.status_code}")
+        print(json.dumps(response.json(), indent=2))
+        return response.json()
+    finally:
+        for _, (_, f, _) in files:
+            f.close()
