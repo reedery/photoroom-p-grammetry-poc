@@ -205,3 +205,29 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# Modal (only ignore Modal files in backend/)
+backend/.modal/
+
+#React fornt end
+# React frontend
+frontend/node_modules/
+frontend/.pnp/
+frontend/.pnp.js
+frontend/build/
+frontend/.env
+frontend/coverage/
+
+# misc
+frontend/.DS_Store
+frontend/*.log
+
+# npm
+frontend/package-lock.json
+frontend/yarn.lock
+
+# IDEs and editors
+frontend/.idea/
+frontend/.vscode/
+frontend/*.sublime-workspace
+
