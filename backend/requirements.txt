@@ -1,5 +1,38 @@
-requests==2.31.0
-fastapi[standard]==0.103.0
+# Core server dependencies
+fastapi==0.103.0
+uvicorn[standard]==0.30.6
 python-multipart==0.0.6
 httpx==0.27.0
+
+# PyTorch with CUDA 12.1 support
+# Install with: pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
+torch==2.5.1
+torchvision==0.20.1
+
+# ONNX Runtime with GPU support for background removal
+onnxruntime-gpu==1.20.1
+
+# Image processing
+Pillow==10.4.0
 pillow-heif==0.13.1
+imageio==2.36.1
+opencv-python==4.10.0.84
+
+# Requests for API calls (Photoroom)
+requests==2.31.0
+
+# Configuration management
+omegaconf==2.3.0
+
+# Additional TripoSR dependencies
+# Note: Some of these will be installed via TripoSR's requirements.txt
+rembg[gpu]==2.0.59  # GPU-accelerated background removal
+numpy<2.0.0  # Compatibility with older packages
+scipy==1.14.1
+trimesh==4.5.3
+xatlas==0.0.9  # UV unwrapping
+matplotlib==3.9.2
+
+# Optional but recommended
+tqdm==4.66.5  # Progress bars
+

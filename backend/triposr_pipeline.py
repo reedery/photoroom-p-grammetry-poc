@@ -81,16 +81,30 @@ class TripoSRPipeline:
 
     def _find_triposr_entrypoint(self) -> Optional[Path]:
         """Best-effort search for TripoSR CLI within container or local environment."""
-        # Allow override via env var
-        base = Path(os.environ.get("TRIPOSR_DIR", "/root/TripoSR")).resolve()
-        candidates = [
-            base / "run.py",
-            base / "scripts" / "run.py",
-            base / "inference" / "run.py",
+        # Allow override via env var, with local-friendly defaults
+        default_paths = [
+            "/root/TripoSR",  # Modal/container path
+            str(Path(__file__).parent / "TripoSR"),  # Local backend directory
+            str(Path.home() / "TripoSR"),  # User home directory
+            "./TripoSR",  # Current directory
         ]
-        for c in candidates:
-            if c.exists():
-                return c
+        
+        base_path = os.environ.get("TRIPOSR_DIR", None)
+        if base_path:
+            bases = [Path(base_path).resolve()]
+        else:
+            bases = [Path(p).resolve() for p in default_paths if Path(p).exists()]
+        
+        for base in bases:
+            candidates = [
+                base / "run.py",
+                base / "scripts" / "run.py",
+                base / "inference" / "run.py",
+            ]
+            for c in candidates:
+                if c.exists():
+                    return c
+        
         return None
 
     def run_triposr(self, input_images: List[Path]) -> dict:

@@ -1,6 +1,7 @@
 // State management
-let selectedFiles = [];
+let selectedFile = null;
 let apiKey = '';
+let currentModel = null;
 
 // DOM Elements
 const apiKeyInput = document.getElementById('apiKey');
@@ -10,12 +11,14 @@ const demoShoeButton = document.getElementById('demoShoeButton');
 const demoMugButton = document.getElementById('demoMugButton');
 const fileCount = document.getElementById('fileCount');
 const previewSection = document.getElementById('previewSection');
-const imageGrid = document.getElementById('imageGrid');
+const imagePreview = document.getElementById('imagePreview');
 const processButton = document.getElementById('processButton');
+const processButtonText = document.getElementById('processButtonText');
+const processingSpinner = document.getElementById('processingSpinner');
 const statusMessage = document.getElementById('statusMessage');
 
 // Initialize Three.js Scene
-let scene, camera, renderer, cube, controls;
+let scene, camera, renderer, controls;
 
 function initThreeJS() {
     const container = document.getElementById('threejs-container');
@@ -26,46 +29,166 @@ function initThreeJS() {
     
     // Camera
     camera = new THREE.PerspectiveCamera(75, 1, 0.1, 1000);
-    camera.position.z = 5;
+    camera.position.set(0, 0, 5);
     
     // Renderer
     renderer = new THREE.WebGLRenderer({ antialias: true });
     renderer.setSize(400, 400);
     container.appendChild(renderer.domElement);
     
-    // Cube
-    const geometry = new THREE.BoxGeometry(2, 2, 2);
-    const material = new THREE.MeshPhongMaterial({ 
-        color: 0x6366f1,
-        shininess: 100
-    });
-    cube = new THREE.Mesh(geometry, material);
-    scene.add(cube);
-    
     // Lighting
-    const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
+    const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
     scene.add(ambientLight);
     
-    const pointLight = new THREE.PointLight(0xffffff, 1);
-    pointLight.position.set(5, 5, 5);
-    scene.add(pointLight);
+    const directionalLight1 = new THREE.DirectionalLight(0xffffff, 0.8);
+    directionalLight1.position.set(5, 5, 5);
+    scene.add(directionalLight1);
+    
+    const directionalLight2 = new THREE.DirectionalLight(0xffffff, 0.4);
+    directionalLight2.position.set(-5, -5, -5);
+    scene.add(directionalLight2);
     
     // Controls
     controls = new THREE.OrbitControls(camera, renderer.domElement);
     controls.enableDamping = true;
     controls.dampingFactor = 0.05;
     controls.enableZoom = true;
-    controls.autoRotate = true;
+    controls.autoRotate = false;
     controls.autoRotateSpeed = 2;
+    
+    // Add a placeholder cube initially
+    addPlaceholderCube();
     
     // Animation loop
     animate();
 }
 
+function addPlaceholderCube() {
+    const geometry = new THREE.BoxGeometry(2, 2, 2);
+    const material = new THREE.MeshPhongMaterial({ 
+        color: 0x6366f1,
+        shininess: 100
+    });
+    const cube = new THREE.Mesh(geometry, material);
+    currentModel = cube;
+    scene.add(cube);
+}
+
 function animate() {
     requestAnimationFrame(animate);
     controls.update();
+    
+    // Rotate the placeholder cube slowly
+    if (currentModel && currentModel.geometry.type === 'BoxGeometry') {
+        currentModel.rotation.x += 0.005;
+        currentModel.rotation.y += 0.005;
+    }
+    
     renderer.render(scene, camera);
+}
+
+// Load and display 3D model
+function load3DModel(modelUrl, format = 'ply') {
+    // Remove current model if exists
+    if (currentModel) {
+        scene.remove(currentModel);
+        if (currentModel.geometry) currentModel.geometry.dispose();
+        if (currentModel.material) {
+            if (Array.isArray(currentModel.material)) {
+                currentModel.material.forEach(mat => mat.dispose());
+            } else {
+                currentModel.material.dispose();
+            }
+        }
+    }
+    
+    showStatus('Loading 3D model...', 'info');
+    
+    if (format === 'ply') {
+        const loader = new THREE.PLYLoader();
+        loader.load(
+            modelUrl,
+            function (geometry) {
+                geometry.computeVertexNormals();
+                
+                const material = new THREE.MeshPhongMaterial({ 
+                    color: 0x6366f1,
+                    shininess: 80,
+                    vertexColors: geometry.attributes.color ? true : false
+                });
+                
+                const mesh = new THREE.Mesh(geometry, material);
+                
+                // Center and scale the model
+                geometry.computeBoundingBox();
+                const center = new THREE.Vector3();
+                geometry.boundingBox.getCenter(center);
+                mesh.position.sub(center);
+                
+                const size = new THREE.Vector3();
+                geometry.boundingBox.getSize(size);
+                const maxDim = Math.max(size.x, size.y, size.z);
+                const scale = 3 / maxDim;
+                mesh.scale.set(scale, scale, scale);
+                
+                currentModel = mesh;
+                scene.add(mesh);
+                
+                controls.autoRotate = true;
+                showStatus('3D model loaded successfully!', 'success');
+            },
+            function (xhr) {
+                console.log((xhr.loaded / xhr.total * 100) + '% loaded');
+            },
+            function (error) {
+                console.error('Error loading PLY:', error);
+                showStatus('Error loading 3D model', 'error');
+                addPlaceholderCube();
+            }
+        );
+    } else if (format === 'obj') {
+        const loader = new THREE.OBJLoader();
+        loader.load(
+            modelUrl,
+            function (object) {
+                // Apply material to all meshes in the object
+                object.traverse(function (child) {
+                    if (child instanceof THREE.Mesh) {
+                        child.material = new THREE.MeshPhongMaterial({ 
+                            color: 0x6366f1,
+                            shininess: 80
+                        });
+                    }
+                });
+                
+                // Center and scale
+                const box = new THREE.Box3().setFromObject(object);
+                const center = new THREE.Vector3();
+                box.getCenter(center);
+                object.position.sub(center);
+                
+                const size = new THREE.Vector3();
+                box.getSize(size);
+                const maxDim = Math.max(size.x, size.y, size.z);
+                const scale = 3 / maxDim;
+                object.scale.set(scale, scale, scale);
+                
+                currentModel = object;
+                scene.add(object);
+                
+                controls.autoRotate = true;
+                showStatus('3D model loaded successfully!', 'success');
+            },
+            function (xhr) {
+                console.log((xhr.loaded / xhr.total * 100) + '% loaded');
+            },
+            function (error) {
+                console.error('Error loading OBJ:', error);
+                showStatus('Error loading 3D model', 'error');
+                addPlaceholderCube();
+            }
+        );
+    }
 }
 
 // Event Listeners
@@ -78,32 +201,54 @@ uploadButton.addEventListener('click', () => {
     fileInput.click();
 });
 
-demoShoeButton.addEventListener('click', () => {
-    showStatus('Demo: Shoe dataset would be loaded here. Coming soon!', 'info');
-    // In the future, this could load pre-captured shoe images
-    // For now, just show an informative message
+demoShoeButton.addEventListener('click', async () => {
+    showStatus('Loading shoe image...', 'info');
+    try {
+        const response = await fetch('img/shoe.jpg');
+        const blob = await response.blob();
+        const file = new File([blob], 'shoe.jpg', { type: 'image/jpeg' });
+        selectedFile = file;
+        displayImagePreview();
+        previewSection.style.display = 'block';
+        fileCount.textContent = '1 image selected (Demo: Shoe)';
+        showStatus('Shoe image loaded!', 'success');
+    } catch (error) {
+        console.error('Error loading shoe image:', error);
+        showStatus('Error loading shoe image', 'error');
+    }
 });
 
-demoMugButton.addEventListener('click', () => {
-    showStatus('Demo: Mug dataset would be loaded here. Coming soon!', 'info');
-    // In the future, this could load pre-captured mug images
-    // For now, just show an informative message
+demoMugButton.addEventListener('click', async () => {
+    showStatus('Loading mug image...', 'info');
+    try {
+        const response = await fetch('img/mug.jpg');
+        const blob = await response.blob();
+        const file = new File([blob], 'mug.jpg', { type: 'image/jpeg' });
+        selectedFile = file;
+        displayImagePreview();
+        previewSection.style.display = 'block';
+        fileCount.textContent = '1 image selected (Demo: Mug)';
+        showStatus('Mug image loaded!', 'success');
+    } catch (error) {
+        console.error('Error loading mug image:', error);
+        showStatus('Error loading mug image', 'error');
+    }
 });
 
 fileInput.addEventListener('change', (e) => {
-    const files = Array.from(e.target.files);
+    const file = e.target.files[0];
     
-    if (files.length === 0) return;
+    if (!file) return;
     
-    selectedFiles = files;
-    updateFileCount();
-    displayImagePreviews();
+    selectedFile = file;
+    displayImagePreview();
     previewSection.style.display = 'block';
+    fileCount.textContent = '1 image selected';
 });
 
 processButton.addEventListener('click', async () => {
-    if (selectedFiles.length === 0) {
-        showStatus('Please select images first', 'error');
+    if (!selectedFile) {
+        showStatus('Please select an image first', 'error');
         return;
     }
     
@@ -112,74 +257,58 @@ processButton.addEventListener('click', async () => {
         return;
     }
     
-    await processImages();
+    await processImage();
 });
 
 // Functions
-function updateFileCount() {
-    const count = selectedFiles.length;
-    fileCount.textContent = count === 1 
-        ? '1 image selected' 
-        : `${count} images selected`;
-}
-
-function displayImagePreviews() {
-    imageGrid.innerHTML = '';
+function displayImagePreview() {
+    imagePreview.innerHTML = '';
     
-    selectedFiles.forEach((file, index) => {
-        const reader = new FileReader();
+    const reader = new FileReader();
+    
+    reader.onload = (e) => {
+        const imageContainer = document.createElement('div');
+        imageContainer.className = 'image-preview-container';
         
-        reader.onload = (e) => {
-            const imageItem = document.createElement('div');
-            imageItem.className = 'image-item';
-            
-            const img = document.createElement('img');
-            img.src = e.target.result;
-            img.alt = file.name;
-            
-            const removeBtn = document.createElement('button');
-            removeBtn.className = 'remove-btn';
-            removeBtn.innerHTML = '×';
-            removeBtn.onclick = () => removeImage(index);
-            
-            imageItem.appendChild(img);
-            imageItem.appendChild(removeBtn);
-            imageGrid.appendChild(imageItem);
+        const img = document.createElement('img');
+        img.src = e.target.result;
+        img.alt = selectedFile.name;
+        img.className = 'preview-image';
+        
+        const removeBtn = document.createElement('button');
+        removeBtn.className = 'remove-preview-btn';
+        removeBtn.innerHTML = '× Remove';
+        removeBtn.onclick = () => {
+            selectedFile = null;
+            previewSection.style.display = 'none';
+            fileInput.value = '';
+            fileCount.textContent = 'No image selected';
         };
         
-        reader.readAsDataURL(file);
-    });
-}
-
-function removeImage(index) {
-    selectedFiles.splice(index, 1);
-    updateFileCount();
+        imageContainer.appendChild(img);
+        imageContainer.appendChild(removeBtn);
+        imagePreview.appendChild(imageContainer);
+    };
     
-    if (selectedFiles.length === 0) {
-        previewSection.style.display = 'none';
-        fileInput.value = '';
-    } else {
-        displayImagePreviews();
-    }
+    reader.readAsDataURL(selectedFile);
 }
 
-async function processImages() {
+async function processImage() {
+    // Show loading state
     processButton.disabled = true;
-    showStatus('Processing images...', 'info');
+    processButtonText.textContent = 'Processing...';
+    processingSpinner.style.display = 'inline-block';
+    showStatus('Sending image to server for processing...', 'info');
     
     try {
         const formData = new FormData();
-        
-        // Add all files
-        selectedFiles.forEach(file => {
-            formData.append('files', file);
-        });
-        
-        // Add API key
+        formData.append('image', selectedFile);
         formData.append('photoroom_api_key', apiKey);
         
-        // Replace with your actual backend endpoint
-        const response = await fetch('http://localhost:8000/', {
+        // TODO: Update this endpoint when backend is ready
+        const API_ENDPOINT = 'http://localhost:8000/process';
+        
+        const response = await fetch(API_ENDPOINT, {
             method: 'POST',
             body: formData
         });
@@ -190,17 +319,30 @@ async function processImages() {
         
         const result = await response.json();
         
-        showStatus(`Success! Processed ${result.files_received} images`, 'success');
+        showStatus('Processing complete! Loading 3D model...', 'success');
         console.log('Processing result:', result);
         
-        // Here you could update the 3D viewer with the processed result
-        // For now, we just show the success message
+        // Load the 3D model
+        // Assuming the backend returns a URL or path to the 3D model file
+        if (result.model_url) {
+            // Determine format from URL or result
+            const format = result.format || 'ply';
+            load3DModel(result.model_url, format);
+        } else if (result.model_path) {
+            // If backend returns a relative path
+            load3DModel(result.model_path, result.format || 'ply');
+        } else {
+            throw new Error('No 3D model URL in response');
+        }
         
     } catch (error) {
-        console.error('Error processing images:', error);
+        console.error('Error processing image:', error);
         showStatus(`Error: ${error.message}`, 'error');
     } finally {
+        // Reset button state
         processButton.disabled = false;
+        processButtonText.textContent = 'Generate 3D Model';
+        processingSpinner.style.display = 'none';
     }
 }
 
@@ -238,4 +380,3 @@ window.addEventListener('resize', () => {
     camera.updateProjectionMatrix();
     renderer.setSize(width, height);
 });
-

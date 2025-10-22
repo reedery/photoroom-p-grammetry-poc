@@ -1,84 +1,119 @@
+"""
+Local FastAPI server for 3D model generation from images.
+Runs TripoSR with CUDA acceleration on the local machine.
+"""
 import os
-import modal
+import base64
+import json
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException
+from fastapi.responses import JSONResponse, FileResponse
+from fastapi.middleware.cors import CORSMiddleware
+import torch
 
-app = modal.App("3dgen-poc-backend")
+from triposr_pipeline import TripoSRPipeline
 
-# GPU-enabled base; install TripoSR and backend deps
-# Note: Using -devel (not -runtime) because we compile torchmcubes from source
-image = (
-    modal.Image.from_registry("nvidia/cuda:12.1.1-cudnn8-devel-ubuntu22.04", add_python="3.11")
-    .apt_install(
-        "git",
-        "build-essential",
-        "cmake",
-        "ninja-build",
-        # OpenGL/Mesa libraries for moderngl texture baking
-        "libgl1-mesa-glx",
-        "libgl1-mesa-dri",
-        "libglib2.0-0",
-        "libsm6",
-        "libxrender1",
-        "libxext6",
-        # Virtual display for headless OpenGL rendering
-        "xvfb",
-    )
-    .run_commands(
-        "pip install --upgrade pip",
-        # Install CUDA-enabled Torch explicitly for CUDA 12.1 (pinned version)
-        "pip install torch==2.5.1 torchvision --index-url https://download.pytorch.org/whl/cu121",
-        # Install onnxruntime-gpu for CUDA acceleration (pinned version)
-        "pip install onnxruntime-gpu==1.20.1",
-        # Install additional dependencies for TripoSR utils (pinned versions)
-        "pip install imageio==2.36.1 omegaconf==2.3.0",
-        # Shallow clone TripoSR to save time and bandwidth
-        "git clone --depth 1 https://github.com/VAST-AI-Research/TripoSR.git /root/TripoSR",
-        # Install TripoSR requirements with CUDA arch flag for L40S (8.9)
-        # Only compile for L40S to speed up image build (75% faster than 4 archs)
-        'export CXX=g++; export CUDA_HOME=/usr/local/cuda; export PATH=$PATH:/usr/local/cuda/bin; export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/usr/local/cuda/lib64; export TORCH_CUDA_ARCH_LIST="8.9"; pip install -r /root/TripoSR/requirements.txt --no-cache-dir',
-    )
-    .pip_install_from_requirements("backend/requirements.txt")
-    .add_local_file("backend/triposr_pipeline.py", "/root/triposr_pipeline.py")
-    .add_local_file("backend/background_removal.py", "/root/background_removal.py")
-    .add_local_dir("backend/img", "/root/img")
+app = FastAPI(title="3D Model Generation API", version="1.0.0")
+
+# Enable CORS for frontend access
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Configure this for production
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
+# Configuration
+WORK_DIR = Path("/tmp/reconstruction")
+WORK_DIR.mkdir(parents=True, exist_ok=True)
 
-MINUTE = 60
+# Check CUDA availability at startup
+CUDA_AVAILABLE = torch.cuda.is_available()
+print(f"\n{'='*60}")
+print(f"3D Model Generation Server Starting")
+print(f"{'='*60}")
+print(f"CUDA Available: {CUDA_AVAILABLE}")
+if CUDA_AVAILABLE:
+    print(f"GPU: {torch.cuda.get_device_name(0)}")
+    print(f"CUDA Version: {torch.version.cuda}")
+print(f"{'='*60}\n")
 
-# Fast boot trades startup time for slightly slower inference
-# True: Fast cold starts (~30s), good for web apps with scaledown_window
-# False: Slow cold starts (~90s), best inference speed
-FAST_BOOT = True
 
-@app.function(
-    image=image,
-    gpu="L40S",  # Ada Lovelace arch, 48GB VRAM, excellent price/performance
-    memory=16384,  # 16GB for model + textures
-    timeout= 5 * MINUTE,  # Container startup + processing time
-    scaledown_window= 5 * MINUTE,  
-    secrets=[modal.Secret.from_name("photoroom-api")],
-)
-@modal.concurrent(max_inputs=4)  # Process up to 4 requests simultaneously
-def process_images(image_data: list[bytes], photoroom_api_key: Optional[str] = None, include_files: bool = False) -> dict:
-    from pathlib import Path
-    from triposr_pipeline import TripoSRPipeline
-    import base64
-    import torch
+@app.get("/")
+async def root():
+    """Health check endpoint"""
+    return {
+        "status": "online",
+        "cuda_available": CUDA_AVAILABLE,
+        "gpu": torch.cuda.get_device_name(0) if CUDA_AVAILABLE else None,
+    }
 
-    # Fast boot optimization: disable PyTorch compilation for faster startup
-    if FAST_BOOT:
-        torch.set_float32_matmul_precision('high')  # Use TF32 on Ampere+ GPUs
-        torch._dynamo.config.suppress_errors = True  # Skip dynamo compilation
-        
-    # Use provided key or fall back to Modal secret
-    if photoroom_api_key is None:
-        photoroom_api_key = os.environ.get("PHOTOROOM_API_KEY")
 
-    work_dir = Path("/tmp/reconstruction")
-    pipeline = TripoSRPipeline(work_dir)
-    result = pipeline.run(image_data, photoroom_api_key)
+@app.get("/health")
+async def health():
+    """Detailed health check"""
+    return {
+        "status": "healthy",
+        "cuda_available": CUDA_AVAILABLE,
+        "cuda_version": torch.version.cuda if CUDA_AVAILABLE else None,
+        "gpu_name": torch.cuda.get_device_name(0) if CUDA_AVAILABLE else None,
+        "gpu_memory": f"{torch.cuda.get_device_properties(0).total_memory / 1024**3:.1f} GB" if CUDA_AVAILABLE else None,
+    }
+
+
+@app.post("/generate")
+async def generate_3d_model(
+    files: List[UploadFile] = File(...),
+    photoroom_api_key: Optional[str] = Form(None),
+    include_files: bool = Form(False)
+):
+    """
+    Generate 3D model from uploaded images
+    
+    Args:
+        files: List of image files (up to 5)
+        photoroom_api_key: Optional API key for background removal
+        include_files: Whether to include base64-encoded output files in response
+    
+    Returns:
+        JSON response with processing results and optional file downloads
+    """
+    if not files:
+        raise HTTPException(status_code=400, detail="No files uploaded")
+    
+    # Limit to 5 images
+    if len(files) > 5:
+        files = files[:5]
+    
+    image_data = []
+    file_info = []
+    
+    for file in files:
+        content = await file.read()
+        image_data.append(content)
+        file_info.append({
+            "filename": file.filename,
+            "size": len(content),
+            "content_type": file.content_type
+        })
+    
+    # Use environment variable for API key if not provided
+    api_key = photoroom_api_key or os.environ.get("PHOTOROOM_API_KEY")
+    
+    # Process images
+    print(f"\n{'='*60}")
+    print(f"Processing {len(image_data)} image(s)")
+    print(f"{'='*60}")
+    
+    # Use TF32 on Ampere+ GPUs for better performance
+    if CUDA_AVAILABLE:
+        torch.set_float32_matmul_precision('high')
+    
+    work_dir = WORK_DIR / f"request_{os.getpid()}_{Path(files[0].filename).stem}"
+    pipeline = TripoSRPipeline(work_dir, verbose=True)
+    result = pipeline.run(image_data, api_key)
     
     # Optionally include base64-encoded files for download
     if include_files and result.get("success"):
@@ -90,149 +125,92 @@ def process_images(image_data: list[bytes], photoroom_api_key: Optional[str] = N
                 files_content[file_path.name] = base64.b64encode(content).decode('utf-8')
         result["files_base64"] = files_content
     
-    return result
-
-@app.function(image=image)
-@modal.asgi_app()
-def web_app():
-    from fastapi import FastAPI, UploadFile, File, Form, HTTPException
-    from typing import List, Optional
-    
-    app = FastAPI()
-    
-    @app.post("/")
-    async def upload(
-        files: List[UploadFile] = File(...),
-        photoroom_api_key: Optional[str] = Form(None)
-    ):
-        if not files:
-            raise HTTPException(status_code=400, detail="No files uploaded")
-        
-        image_data = []
-        file_info = []
-        
-        for file in files:
-            content = await file.read()
-            image_data.append(content)
-            file_info.append({
-                "filename": file.filename,
-                "size": len(content),
-                "content_type": file.content_type
-            })
-        # Limit to 5 images as per design
-        if len(image_data) > 5:
-            image_data = image_data[:5]
-
-        result = process_images.remote(image_data, photoroom_api_key)
-        
-        return {
-            "status": "success",
-            "files_received": len(files),
-            "file_info": file_info,
-            "api_key_present": bool(photoroom_api_key),
-            "pipeline_result": result
-        }
-
-    @app.get("/demo")
-    async def demo():
-        from pathlib import Path
-        from fastapi import HTTPException
-
-        img_dir = Path("/root/img_testing0")
-        if not img_dir.exists():
-            raise HTTPException(status_code=404, detail="Demo image directory not found")
-
-        images = []
-        for ext in ("*.png", "*.jpg", "*.jpeg", "*.webp"):
-            images.extend(img_dir.glob(ext))
-
-        if not images:
-            raise HTTPException(status_code=404, detail="No demo images found")
-
-        image_data = [p.read_bytes() for p in images[:5]]
-
-        result = process_images.remote(image_data, None)
-
-        return {
-            "status": "success",
-            "source": "/root/img_testing0",
-            "files_used": [p.name for p in images[:5]],
-            "pipeline_result": result,
-        }
-    
-    return app
+    return {
+        "status": "success" if result.get("success") else "error",
+        "files_received": len(files),
+        "file_info": file_info,
+        "api_key_present": bool(api_key),
+        "pipeline_result": result
+    }
 
 
-@app.local_entrypoint()
-def main():
-    """Local entry point - reads local demo images and processes on Modal GPU"""
-    import json
-    import base64
-    
-    # Read demo images from local directory
+@app.get("/demo")
+async def demo():
+    """
+    Run demo with pre-loaded images from the img directory
+    """
     img_dir = Path(__file__).parent / "img"
-    
     if not img_dir.exists():
-        print(f"❌ Demo image directory not found: {img_dir}")
-        return
+        raise HTTPException(status_code=404, detail="Demo image directory not found")
     
-    # Look specifically for mug.jpg first, then any other images
-    mug_image = img_dir / "mug.jpg"
-    if mug_image.exists():
-        images = [mug_image]
-    else:
-        images = []
-        for ext in ("*.png", "*.jpg", "*.jpeg", "*.webp", "*.heic", "*.HEIC"):
-            images.extend(img_dir.glob(ext))
+    images = []
+    for ext in ("*.png", "*.jpg", "*.jpeg", "*.webp"):
+        images.extend(sorted(img_dir.glob(ext)))
     
     if not images:
-        print(f"❌ No demo images found in {img_dir}")
-        return
+        raise HTTPException(status_code=404, detail="No demo images found")
+    
+    # Limit to 5 images
+    images = images[:5]
     
     print(f"\n{'='*60}")
-    print(f"Running demo with {len(images)} image(s) on Modal GPU")
+    print(f"Running demo with {len(images)} image(s)")
     print(f"{'='*60}")
     for img in images:
         print(f"  - {img.name}")
     
-    # Read image bytes locally
-    image_data = [p.read_bytes() for p in images[:5]]
+    image_data = [p.read_bytes() for p in images]
     
-    # Process on Modal GPU and download files
-    print("\nInvoking process_images() on Modal GPU...")
-    result = process_images.remote(image_data, None, include_files=True)
+    # Use TF32 on Ampere+ GPUs
+    if CUDA_AVAILABLE:
+        torch.set_float32_matmul_precision('high')
     
-    # Save downloaded files locally
-    if result.get("success") and "files_base64" in result:
-        output_dir = Path(__file__).parent / "local_output"
-        output_dir.mkdir(exist_ok=True)
-        
-        print(f"\n{'='*60}")
-        print("DOWNLOADING FILES")
-        print(f"{'='*60}")
-        
-        for filename, content_b64 in result["files_base64"].items():
-            content = base64.b64decode(content_b64)
-            output_path = output_dir / filename
-            output_path.write_bytes(content)
-            print(f"✓ Saved: {output_path}")
-        
-        # Remove base64 data from result for cleaner display
-        file_list = list(result["files_base64"].keys())
-        del result["files_base64"]
-        
-        print(f"\n{'='*60}")
-        print("DEMO RESULT")
-        print(f"{'='*60}")
-        print(json.dumps(result, indent=2))
-        print(f"\n✅ Demo completed successfully!")
-        print(f"\n📁 Output files saved to: {output_dir.absolute()}")
-        print(f"   Files: {', '.join(file_list)}")
-    else:
-        print("\n" + "="*60)
-        print("DEMO RESULT")
-        print("="*60)
-        print(json.dumps(result, indent=2))
-        print("\n❌ Demo failed. Check error above.")
+    work_dir = WORK_DIR / "demo"
+    pipeline = TripoSRPipeline(work_dir, verbose=True)
+    result = pipeline.run(image_data, None)
     
-    return result
+    return {
+        "status": "success" if result.get("success") else "error",
+        "source": str(img_dir),
+        "files_used": [p.name for p in images],
+        "pipeline_result": result,
+    }
+
+
+@app.get("/download/{filename}")
+async def download_file(filename: str):
+    """
+    Download a generated file
+    Note: This is a simple implementation. For production, implement proper file management and security.
+    """
+    # Search in work directory for the file
+    for result_dir in WORK_DIR.glob("*/triposr_output"):
+        file_path = result_dir / filename
+        if file_path.exists() and file_path.is_file():
+            return FileResponse(
+                path=str(file_path),
+                filename=filename,
+                media_type="application/octet-stream"
+            )
+    
+    raise HTTPException(status_code=404, detail="File not found")
+
+
+if __name__ == "__main__":
+    import uvicorn
+    
+    # Get port from environment or use default
+    port = int(os.environ.get("PORT", 8000))
+    host = os.environ.get("HOST", "0.0.0.0")
+    
+    print(f"\nStarting server on {host}:{port}")
+    print(f"CUDA Available: {CUDA_AVAILABLE}\n")
+    
+    uvicorn.run(
+        app,
+        host=host,
+        port=port,
+        log_level="info",
+        access_log=True
+    )
+
