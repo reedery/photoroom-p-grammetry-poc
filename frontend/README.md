@@ -1,46 +1,121 @@
-# Getting Started with Create React App
+# Photogrammetry POC - Frontend
 
-This project was bootstrapped with [Create React App](https://github.com/facebook/create-react-app).
+## How to Run
 
-## Available Scripts
+**Python 3.x:**
 
-In the project directory, you can run:
+```bash
+cd frontend
+python3 -m http.server 8080
+```
 
-### `npm start`
+Then open your browser and navigate to:
 
-Runs the app in the development mode.\
-Open [http://localhost:3000](http://localhost:3000) to view it in the browser.
+```
+http://localhost:8080
+```
 
-The page will reload if you make edits.\
-You will also see any lint errors in the console.
+## Usage
 
-### `npm test`
+1. **Enter API Key**: Enter your Photoroom API key in the input field (it will be saved in your browser's local storage)
 
-Launches the test runner in the interactive watch mode.\
-See the section about [running tests](https://facebook.github.io/create-react-app/docs/running-tests) for more information.
+2. **Read the Tips**: Review the photogrammetry tips section to understand how to take good photos for 3D reconstruction
 
-### `npm run build`
+3. **Select Images**:
 
-Builds the app for production to the `build` folder.\
-It correctly bundles React in production mode and optimizes the build for the best performance.
+   - Click "Select Images" to choose multiple images from your device
+   - Or click "👟 Try a Shoe" or "☕ Try a Mug" for demo datasets (coming soon)
 
-The build is minified and the filenames include the hashes.\
-Your app is ready to be deployed!
+4. **Preview**: Review the selected images in the preview grid. You can remove individual images by hovering over them and clicking the × button
 
-See the section about [deployment](https://facebook.github.io/create-react-app/docs/deployment) for more information.
+5. **Process**: Click "Process Images" to send the images to the backend for processing
 
-### `npm run eject`
+6. **3D Viewer**: The Three.js viewer shows a rotating cube (this will be replaced with your 3D model once processing is complete)
 
-**Note: this is a one-way operation. Once you `eject`, you can’t go back!**
+### Important: Taking Good Photos
 
-If you aren’t satisfied with the build tool and configuration choices, you can `eject` at any time. This command will remove the single build dependency from your project.
+The app includes detailed tips, but remember:
 
-Instead, it will copy all the configuration files and the transitive dependencies (webpack, Babel, ESLint, etc) right into your project so you have full control over them. All of the commands except `eject` will still work, but they will point to the copied scripts so you can tweak them. At this point you’re on your own.
+- ✅ **DO**: Walk around the object with your camera
+- ❌ **DON'T**: Rotate the object on a turntable
+- COLMAP needs camera movement with parallax, not object rotation
 
-You don’t have to ever use `eject`. The curated feature set is suitable for small and middle deployments, and you shouldn’t feel obligated to use this feature. However we understand that this tool wouldn’t be useful if you couldn’t customize it when you are ready for it.
+## Backend Connection
 
-## Learn More
+The frontend is configured to send requests to:
 
-You can learn more in the [Create React App documentation](https://facebook.github.io/create-react-app/docs/getting-started).
+```
+http://localhost:8000/
+```
 
-To learn React, check out the [React documentation](https://reactjs.org/).
+Make sure your Modal backend is running and accessible at this URL. You can modify the endpoint in `app.js` if needed:
+
+```javascript
+const response = await fetch("http://localhost:8000/", {
+  method: "POST",
+  body: formData,
+});
+```
+
+## File Structure
+
+```
+frontend/
+├── index.html      # Main HTML structure
+├── style.css       # Styling (Photoroom-inspired design)
+├── app.js          # JavaScript logic & Three.js integration
+└── README.md       # This file
+```
+
+## Technologies Used
+
+- **HTML5**: Semantic markup
+- **CSS3**: Modern styling with gradients, flexbox, and grid
+- **JavaScript (ES6+)**: Async/await, File API
+- **Three.js**: 3D visualization with OrbitControls
+- **LocalStorage**: Persistent API key storage
+
+## Customization
+
+### Change Backend URL
+
+Edit `app.js` line ~140:
+
+```javascript
+const response = await fetch('YOUR_BACKEND_URL', {
+```
+
+### Modify Three.js Scene
+
+Edit the `initThreeJS()` function in `app.js` to customize:
+
+- Cube size and color
+- Camera position
+- Lighting
+- Auto-rotation speed
+
+### Adjust Colors
+
+Edit CSS variables in `style.css`:
+
+```css
+:root {
+  --primary-color: #6366f1;
+  --primary-hover: #4f46e5;
+  /* ... more variables */
+}
+```
+
+## Browser Support
+
+- Chrome/Edge (latest)
+- Firefox (latest)
+- Safari (latest)
+- Mobile browsers (iOS Safari, Chrome Mobile)
+
+## Notes
+
+- The API key is stored in your browser's localStorage for convenience
+- Images are not uploaded until you click "Process Images"
+- The Three.js viewer currently shows a demo cube - this will be replaced with your 3D reconstruction
+- Make sure to enable CORS on your backend if running on different ports

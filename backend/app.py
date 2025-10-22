@@ -3,13 +3,12 @@ from pathlib import Path
 
 app = modal.App("photogrammetry-poc-backend")
 
-# Create image and add pipeline.py to it
+# Use COLMAP docker image as base, then add Python
 image = (
-    modal.Image.debian_slim(python_version="3.11")
+    modal.Image.from_registry("colmap/colmap:latest", add_python="3.11")
     .pip_install_from_requirements("backend/requirements.txt")
     .add_local_file("backend/pipeline.py", "/root/pipeline.py")
 )
-
 
 @app.function(image=image, cpu=2, memory=2048, timeout=300)
 def process_images(image_data: list[bytes]) -> dict:
@@ -18,7 +17,6 @@ def process_images(image_data: list[bytes]) -> dict:
     
     pipeline = PhotogrammetryPipeline(Path("/tmp/reconstruction"))
     return pipeline.run_test_pipeline(image_data)
-
 
 @app.function(image=image)
 @modal.asgi_app()
@@ -60,14 +58,13 @@ def web_app():
     
     return app
 
-
 @app.local_entrypoint()
 def test():
     import httpx
     import json
     
-    img_dir = Path(__file__).parent / "img_testing"
-    images = list(img_dir.glob("*.png"))[:3]
+    img_dir = Path(__file__).parent / "img_testing3"
+    images = list(img_dir.glob("*.jpg"))
     
     if not images:
         print("No test images found")
