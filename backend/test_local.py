@@ -12,7 +12,7 @@ def test_pipeline_locally():
     """Test the pipeline with local images"""
     
     # Setup
-    img_testing_dir = Path(__file__).parent / "img_testing3"
+    img_testing_dir = Path(__file__).parent / "img_testing2"
     work_dir = Path(__file__).parent / "local_test_output"
     
     # Clean up previous test
@@ -57,7 +57,8 @@ def test_pipeline_locally():
     
     # Create and run pipeline
     try:
-        pipeline = PhotogrammetryPipeline(work_dir)
+        # CPU-only mode: skips GPU-requiring dense reconstruction
+        pipeline = PhotogrammetryPipeline(work_dir, cpu_only=True)
         result = pipeline.run_full_pipeline(image_data, photoroom_api_key)
         
         print(f"\n{'='*60}")
