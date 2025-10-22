@@ -7,7 +7,7 @@ def test_pipeline_locally():
     # Test the pipeline OUTSIDE of Modal
 
     # Setup
-    img_testing_dir = Path(__file__).parent / "img_testing"
+    img_testing_dir = Path(__file__).parent / "img_testing3"
     work_dir = Path(__file__).parent / "local_test_output"
     
     # Clean up previous test
