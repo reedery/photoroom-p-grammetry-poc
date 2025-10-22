@@ -1,11 +1,16 @@
+"""
+Local testing script for the photogrammetry pipeline
+Run this OUTSIDE of Modal to test your pipeline logic locally
+"""
 
 from pathlib import Path
 from pipeline import PhotogrammetryPipeline
 import sys
+import os
 
 def test_pipeline_locally():
-    # Test the pipeline OUTSIDE of Modal
-
+    """Test the pipeline with local images"""
+    
     # Setup
     img_testing_dir = Path(__file__).parent / "img_testing3"
     work_dir = Path(__file__).parent / "local_test_output"
@@ -21,8 +26,8 @@ def test_pipeline_locally():
     test_images = list(img_testing_dir.glob("*.jpg"))
     
     if not test_images:
-        print(" - No test images found in img_testing folder")
-        print(f" Looking in: {img_testing_dir.absolute()}")
+        print("❌ No test images found in img_testing folder")
+        print(f"   Looking in: {img_testing_dir.absolute()}")
         return
     
     print(f"\n{'='*60}")
@@ -41,26 +46,41 @@ def test_pipeline_locally():
     
     print(f"✓ Loaded {len(image_data)} images\n")
     
+    # Get Photoroom API key from environment
+    photoroom_api_key = os.environ.get("PHOTOROOM_API_KEY")
+    
+    if photoroom_api_key:
+        print(f"✓ Photoroom API key found (length: {len(photoroom_api_key)})")
+    else:
+        print(f"⚠️  No Photoroom API key found - background removal will be skipped")
+        print(f"   Set with: export PHOTOROOM_API_KEY='your_key_here'\n")
+    
     # Create and run pipeline
     try:
         pipeline = PhotogrammetryPipeline(work_dir)
-        result = pipeline.run_test_pipeline(image_data)
+        result = pipeline.run_full_pipeline(image_data, photoroom_api_key)
         
         print(f"\n{'='*60}")
         print(f"RESULTS")
         print(f"{'='*60}\n")
         
-        for key, value in result.items():
-            print(f"{key}: {value}")
+        import json
+        print(json.dumps(result, indent=2))
         
-        print(f"\n :D Local test completed successfully!")
+        print(f"\n✅ Local test completed successfully!")
         print(f"\nOutput directory: {work_dir.absolute()}")
-        print(f"You can inspect the files there.\n")
+        print(f"You can inspect the files there.")
+        
+        if photoroom_api_key and result.get("images_masked", 0) > 0:
+            print(f"\n🎨 Background-removed images saved to:")
+            print(f"   {work_dir / 'masked'}")
+        
+        print()
         
         return result
         
     except Exception as e:
-        print(f"\n :( Pipeline failed with error:")
+        print(f"\n❌ Pipeline failed with error:")
         print(f"   {type(e).__name__}: {e}")
         import traceback
         traceback.print_exc()
@@ -78,10 +98,13 @@ if __name__ == "__main__":
         )
         print(f"✓ COLMAP found: {result.stdout.strip()}\n")
     except FileNotFoundError:
-        print(" - COLMAP not found, install it first")
-
+        print("❌ COLMAP not found!")
+        print("   Install COLMAP first:")
+        print("   - macOS: brew install colmap")
+        print("   - Ubuntu: sudo apt install colmap")
+        print("   - Windows: Download from https://colmap.github.io/\n")
         sys.exit(1)
     except Exception as e:
-        print(f"Could not verify COLMAP: {e}\n")
+        print(f"⚠️  Could not verify COLMAP: {e}\n")
     
     test_pipeline_locally()

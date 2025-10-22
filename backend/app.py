@@ -63,7 +63,7 @@ def test():
     import httpx
     import json
     
-    img_dir = Path(__file__).parent / "img_testing"
+    img_dir = Path(__file__).parent / "img_testing3"
     images = list(img_dir.glob("*.jpg"))
     
     if not images:
