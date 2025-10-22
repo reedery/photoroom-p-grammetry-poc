@@ -44,24 +44,52 @@ image = (
 )
 
 
+MINUTE = 60
+
+# Fast boot trades startup time for slightly slower inference
+# True: Fast cold starts (~30s), good for web apps with scaledown_window
+# False: Slow cold starts (~90s), best inference speed
+FAST_BOOT = True
+
 @app.function(
     image=image,
-    gpu="T4",
-    memory=8192,
-    timeout=600,
-    secrets=[modal.Secret.from_name("photoroom-api")]
+    gpu="A10G",  # Faster than T4, better price/performance
+    memory=16384,  # 16GB for model + textures
+    timeout=5 * MINUTE,  # Container startup + processing time
+    scaledown_window=5 * MINUTE,  # Keep warm for 5 min after last request ]
+    secrets=[modal.Secret.from_name("photoroom-api")],
 )
-def process_images(image_data: list[bytes], photoroom_api_key: Optional[str] = None) -> dict:
+@modal.concurrent(max_inputs=4)  # Process up to 4 requests simultaneously
+def process_images(image_data: list[bytes], photoroom_api_key: Optional[str] = None, include_files: bool = False) -> dict:
     from pathlib import Path
     from triposr_pipeline import TripoSRPipeline
+    import base64
+    import torch
 
+    # Fast boot optimization: disable PyTorch compilation for faster startup
+    if FAST_BOOT:
+        torch.set_float32_matmul_precision('high')  # Use TF32 on Ampere+ GPUs
+        torch._dynamo.config.suppress_errors = True  # Skip dynamo compilation
+        
     # Use provided key or fall back to Modal secret
     if photoroom_api_key is None:
         photoroom_api_key = os.environ.get("PHOTOROOM_API_KEY")
 
     work_dir = Path("/tmp/reconstruction")
     pipeline = TripoSRPipeline(work_dir)
-    return pipeline.run(image_data, photoroom_api_key)
+    result = pipeline.run(image_data, photoroom_api_key)
+    
+    # Optionally include base64-encoded files for download
+    if include_files and result.get("success"):
+        files_content = {}
+        for file_path_str in result["triposr"]["files"]:
+            file_path = Path(file_path_str)
+            if file_path.is_file():
+                content = file_path.read_bytes()
+                files_content[file_path.name] = base64.b64encode(content).decode('utf-8')
+        result["files_base64"] = files_content
+    
+    return result
 
 @app.function(image=image)
 @modal.asgi_app()
@@ -134,43 +162,6 @@ def web_app():
     return app
 
 
-@app.function(
-    image=image,
-    gpu="T4",
-    memory=8192,
-    timeout=600,
-    secrets=[modal.Secret.from_name("photoroom-api")]
-)
-def download_output_files(image_data: list[bytes], photoroom_api_key: Optional[str] = None):
-    """Process images and return the generated 3D model files as bytes"""
-    from pathlib import Path
-    from triposr_pipeline import TripoSRPipeline
-    import base64
-    
-    # Use provided key or fall back to Modal secret
-    if photoroom_api_key is None:
-        photoroom_api_key = os.environ.get("PHOTOROOM_API_KEY")
-    
-    work_dir = Path("/tmp/reconstruction")
-    pipeline = TripoSRPipeline(work_dir)
-    result = pipeline.run(image_data, photoroom_api_key)
-    
-    if not result.get("success"):
-        return result
-    
-    # Read generated files and encode as base64
-    files_content = {}
-    for file_path_str in result["triposr"]["files"]:
-        file_path = Path(file_path_str)
-        if file_path.is_file():
-            content = file_path.read_bytes()
-            # Store as base64 for JSON serialization
-            files_content[file_path.name] = base64.b64encode(content).decode('utf-8')
-    
-    result["files_base64"] = files_content
-    return result
-
-
 @app.local_entrypoint()
 def main():
     """Local entry point - reads local demo images and processes on Modal GPU"""
@@ -185,7 +176,7 @@ def main():
         return
     
     images = []
-    for ext in ("*.png", "*.jpg", "*.jpeg", "*.webp"):
+    for ext in ("*.png", "*.jpg", "*.jpeg", "*.webp", "*.heic", "*.HEIC"):
         images.extend(img_dir.glob(ext))
     
     if not images:
@@ -203,7 +194,7 @@ def main():
     
     # Process on Modal GPU and download files
     print("\nInvoking process_images() on Modal GPU...")
-    result = download_output_files.remote(image_data, None)
+    result = process_images.remote(image_data, None, include_files=True)
     
     # Save downloaded files locally
     if result.get("success") and "files_base64" in result:

@@ -27,15 +27,39 @@ class TripoSRPipeline:
 
     def save_images(self, image_data: List[bytes]) -> List[Path]:
         import imghdr
-
+        from PIL import Image
+        import io
+        
         self.log(f"Saving {len(image_data)} image(s)...")
         saved: List[Path] = []
+        
         for i, data in enumerate(image_data):
-            kind = imghdr.what(None, h=data) or "jpeg"
-            ext = {"jpeg": ".jpg", "png": ".png", "webp": ".webp"}.get(kind, ".jpg")
+            # Try to detect format
+            kind = imghdr.what(None, h=data)
+            
+            # Check if it might be HEIC (imghdr doesn't detect HEIC)
+            if kind is None and (data[:4] == b'ftyp' or data[4:12] == b'ftypheic' or data[4:12] == b'ftypheix'):
+                # Convert HEIC to JPEG
+                try:
+                    from pillow_heif import register_heif_opener
+                    register_heif_opener()
+                    
+                    img = Image.open(io.BytesIO(data))
+                    img_path = self.img_dir / f"image_{i:03d}.jpg"
+                    img.save(img_path, "JPEG", quality=95)
+                    saved.append(img_path)
+                    self.log(f"  Converted HEIC to JPEG: {img_path.name}")
+                    continue
+                except Exception as e:
+                    self.log(f"  Warning: Could not convert HEIC: {e}")
+                    kind = "jpeg"  # fallback
+            
+            # Handle standard formats
+            ext = {"jpeg": ".jpg", "png": ".png", "webp": ".webp"}.get(kind or "jpeg", ".jpg")
             img_path = self.img_dir / f"image_{i:03d}{ext}"
             img_path.write_bytes(data)
             saved.append(img_path)
+            
         self.log(f"✓ Saved {len(saved)} image(s) to {self.img_dir}")
         return saved
 
