@@ -1,7 +1,7 @@
 import subprocess
 from pathlib import Path
 from typing import List, Optional
-import requests
+from background_removal import BackgroundRemover
 
 class PhotogrammetryPipeline:
     """Handles the complete photogrammetry pipeline"""
@@ -198,59 +198,6 @@ class PhotogrammetryPipeline:
             "mapper": mapper_result
         }
 
-    def remove_backgrounds(self, photoroom_api_key: str) -> dict:
-        """Remove backgrounds using Photoroom API"""
-        self.log("\nRemoving backgrounds with Photoroom API...")
-        
-        image_files = sorted(self.img_dir.glob("*.jpg"))
-        
-        if not image_files:
-            return {
-                "success": False,
-                "error": "No images found to process"
-            }
-        
-        processed = 0
-        failed = 0
-        
-        for i, img_path in enumerate(image_files):
-            self.log(f"  - Processing {img_path.name} ({i+1}/{len(image_files)})")
-            
-            try:
-                with open(img_path, 'rb') as f:
-                    response = requests.post(
-                        'https://sdk.photoroom.com/v1/segment',
-                        headers={'x-api-key': photoroom_api_key},
-                        files={'image_file': f},
-                        data={
-                            'format': 'png',
-                            'channels': 'rgba'
-                        },
-                        timeout=30
-                    )
-                
-                if response.status_code == 200:
-                    # Save as PNG with transparency
-                    output_path = self.masked_dir / f"{img_path.stem}.png"
-                    output_path.write_bytes(response.content)
-                    processed += 1
-                else:
-                    self.log(f"    ✗ Failed: {response.status_code} - {response.text[:100]}")
-                    failed += 1
-                    
-            except Exception as e:
-                self.log(f"    ✗ Error: {str(e)}")
-                failed += 1
-        
-        self.log(f"✓ Background removal complete: {processed} succeeded, {failed} failed\n")
-        
-        return {
-            "success": failed == 0,
-            "processed": processed,
-            "failed": failed,
-            "total": len(image_files)
-        }
-    
     def run_full_pipeline(self, image_data: List[bytes], photoroom_api_key: Optional[str] = None) -> dict:
         """Run the complete pipeline with optional background removal"""
         self.log("\n" + "="*50)
@@ -275,7 +222,8 @@ class PhotogrammetryPipeline:
         bg_removal_result = None
         if photoroom_api_key:
             self.log("\n--- PHASE 2: Background Removal ---\n")
-            bg_removal_result = self.remove_backgrounds(photoroom_api_key)
+            bg_remover = BackgroundRemover(self.img_dir, self.masked_dir, verbose=self.verbose)
+            bg_removal_result = bg_remover.remove_backgrounds(photoroom_api_key)
         else:
             self.log("\n--- PHASE 2: Background Removal (SKIPPED - No API key) ---\n")
         
