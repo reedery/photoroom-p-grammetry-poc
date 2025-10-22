@@ -6,6 +6,7 @@ from typing import Optional
 app = modal.App("3dgen-poc-backend")
 
 # GPU-enabled base; install TripoSR and backend deps
+# Note: Using -devel (not -runtime) because we compile torchmcubes from source
 image = (
     modal.Image.from_registry("nvidia/cuda:12.1.1-cudnn8-devel-ubuntu22.04", add_python="3.11")
     .apt_install(
@@ -25,22 +26,22 @@ image = (
     )
     .run_commands(
         "pip install --upgrade pip",
-        # Install CUDA-enabled Torch explicitly for CUDA 12.1
-        "pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121",
-        # Install onnxruntime-gpu for CUDA acceleration (required by rembg in TripoSR)
-        "pip install onnxruntime-gpu",
-        # Install additional dependencies for TripoSR utils
-        "pip install imageio omegaconf",
-        # Clone TripoSR to a known location
-        "git clone https://github.com/VAST-AI-Research/TripoSR.git /root/TripoSR || true",
-        # Install TripoSR requirements with CUDA arch flags for T4 (7.5), A10G (8.6), and common GPUs
-        # TORCH_CUDA_ARCH_LIST ensures torchmcubes builds kernels for the right GPU architectures
-        'export CXX=g++; export CUDA_HOME=/usr/local/cuda; export PATH=$PATH:/usr/local/cuda/bin; export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/usr/local/cuda/lib64; export TORCH_CUDA_ARCH_LIST="7.0 7.5 8.0 8.6"; pip install -r /root/TripoSR/requirements.txt --no-cache-dir',
+        # Install CUDA-enabled Torch explicitly for CUDA 12.1 (pinned version)
+        "pip install torch==2.5.1 torchvision --index-url https://download.pytorch.org/whl/cu121",
+        # Install onnxruntime-gpu for CUDA acceleration (pinned version)
+        "pip install onnxruntime-gpu==1.20.1",
+        # Install additional dependencies for TripoSR utils (pinned versions)
+        "pip install imageio==2.36.1 omegaconf==2.3.0",
+        # Shallow clone TripoSR to save time and bandwidth
+        "git clone --depth 1 https://github.com/VAST-AI-Research/TripoSR.git /root/TripoSR",
+        # Install TripoSR requirements with CUDA arch flag for L40S (8.9)
+        # Only compile for L40S to speed up image build (75% faster than 4 archs)
+        'export CXX=g++; export CUDA_HOME=/usr/local/cuda; export PATH=$PATH:/usr/local/cuda/bin; export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/usr/local/cuda/lib64; export TORCH_CUDA_ARCH_LIST="8.9"; pip install -r /root/TripoSR/requirements.txt --no-cache-dir',
     )
     .pip_install_from_requirements("backend/requirements.txt")
     .add_local_file("backend/triposr_pipeline.py", "/root/triposr_pipeline.py")
     .add_local_file("backend/background_removal.py", "/root/background_removal.py")
-    .add_local_dir("backend/img_testing0", "/root/img_testing0")
+    .add_local_dir("backend/img", "/root/img")
 )
 
 
@@ -53,10 +54,10 @@ FAST_BOOT = True
 
 @app.function(
     image=image,
-    gpu="A10G",  # Faster than T4, better price/performance
+    gpu="L40S",  # Ada Lovelace arch, 48GB VRAM, excellent price/performance
     memory=16384,  # 16GB for model + textures
-    timeout=5 * MINUTE,  # Container startup + processing time
-    scaledown_window=5 * MINUTE,  # Keep warm for 5 min after last request ]
+    timeout= 5 * MINUTE,  # Container startup + processing time
+    scaledown_window= 5 * MINUTE,  
     secrets=[modal.Secret.from_name("photoroom-api")],
 )
 @modal.concurrent(max_inputs=4)  # Process up to 4 requests simultaneously
@@ -169,15 +170,20 @@ def main():
     import base64
     
     # Read demo images from local directory
-    img_dir = Path(__file__).parent / "img_testing0"
+    img_dir = Path(__file__).parent / "img"
     
     if not img_dir.exists():
         print(f"❌ Demo image directory not found: {img_dir}")
         return
     
-    images = []
-    for ext in ("*.png", "*.jpg", "*.jpeg", "*.webp", "*.heic", "*.HEIC"):
-        images.extend(img_dir.glob(ext))
+    # Look specifically for mug.jpg first, then any other images
+    mug_image = img_dir / "mug.jpg"
+    if mug_image.exists():
+        images = [mug_image]
+    else:
+        images = []
+        for ext in ("*.png", "*.jpg", "*.jpeg", "*.webp", "*.heic", "*.HEIC"):
+            images.extend(img_dir.glob(ext))
     
     if not images:
         print(f"❌ No demo images found in {img_dir}")
