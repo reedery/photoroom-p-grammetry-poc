@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Photogrammetry POC</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Photogrammetry POC</h1>
+            <ul class="subtitle-list subtitle">
+                <li>Batch process photos of an object to create a 3D model.</li>
+                <li><a href="https://colmap.github.io" target="_blank" rel="noopener">COLMAP</a> used to align images.</li>
+                <li><a href="https://docs.photoroom.com/remove-background-api-basic-plan" target="_blank" rel="noopener">Photoroom API</a> used to remove backgrounds.</li>
+                <li>View source code <a href="https://github.com/reedery/photoroom-p-grammetry-poc" target="_blank" rel="noopener">on Github</a>.</li>
+            </ul>
+
+        <main>
+            <!-- API Key Section -->
+            <section class="api-key-section">
+                <label for="apiKey">Photoroom API Key</label>
+                <input 
+                    type="password" 
+                    id="apiKey" 
+                    placeholder="Enter your Photoroom API key"
+                    autocomplete="off"
+                >
+            </section>
+
+            <!-- Image Upload Section -->
+            <section class="upload-section">
+                <div class="file-input-wrapper">
+                    <input 
+                        type="file" 
+                        id="fileInput" 
+                        accept="image/*" 
+                        multiple
+                        hidden
+                    >
+                    <div class="button-group">
+                        <button id="uploadButton" class="btn btn-primary">
+                            <svg width="20" height="20" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
+                                <path d="M10 4V16M4 10H16" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+                            </svg>
+                            Select Images
+                        </button>
+                        <button id="demoShoeButton" class="btn btn-demo btn-demo-green">
+                            👟 Try a Shoe
+                        </button>
+                        <button id="demoMugButton" class="btn btn-demo btn-demo-orange">
+                            ☕ Try a Mug
+                        </button>
+                    </div>
+                    <span id="fileCount" class="file-count">No images selected</span>
+                </div>
+
+                <!-- Photogrammetry Tips -->
+                <div class="tips-section">
+                    <h3>Image Taking Tips</h3>
+
+                    
+                    <div class="tips-grid">
+                        <div class="tip-card">
+                            <h4>✅ DO: Walk Around the Object</h4>
+
+                            <ul>
+                                <li><strong>Move your camera</strong> around the object</li>
+                                <li><strong>Keep object stationary</strong> with balanced lighting</li>
+                                <li><strong>60-70% overlap</strong> between photos</li>
+                                <li><strong>Include high/low angles</strong></li>
+                            </ul>
+                        </div>
+                        
+                        <div class="tip-card">
+                            <h4>❌ DON'T: Turntable Photos</h4>
+                            <ul>
+                                <li><strong>Same camera position while rotating the object</strong> results in "No good initial image pair"</li>
+                            </ul>
+                            
+                    
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+
+            <!-- Status Section -->
+            <section class="status-section">
+                <div id="statusMessage" class="status-message"></div>
+            </section>
+
+            <!-- Selected Images Preview -->
+            <section class="preview-section" id="previewSection" style="display: none;">
+                <h2>Selected Images</h2>
+                <div id="imageGrid" class="image-grid"></div>
+                <button id="processButton" class="btn btn-success">
+                    Process Images
+                </button>
+            </section>
+
+            <!-- Three.js Viewer Section -->
+            <section class="viewer-section">
+                <h2>3D Preview</h2>
+                <div id="threejs-container"></div>
+            </section>
+
+        </main>
+
+    </div>
+
+    <!-- Three.js -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+    
+    <!-- App Script -->
+    <script src="app.js"></script>
+</body>
+</html>
+
