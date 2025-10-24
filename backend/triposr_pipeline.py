@@ -64,8 +64,6 @@ class TripoSRPipeline:
         return saved
 
     def remove_backgrounds(self, api_key: Optional[str], image_paths: List[Path]) -> Tuple[List[Path], Optional[dict]]:
-        # TEMP
-        api_key = ""
         
         if not api_key:
             self.log("Background removal skipped (no API key).")
