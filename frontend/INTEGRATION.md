@@ -1,7 +1,15 @@
 # Frontend-Backend Integration Guide
 
+## 🎉 Integration Complete!
+
+Both frontend and backend servers are running and fully integrated!
+
+**Frontend:** http://localhost:8080  
+**Backend API:** http://localhost:8000  
+**Backend Health:** http://localhost:8000/health
+
 ## Overview
-The frontend is now prepared to send single images to the backend for 3D model generation and render the results using Three.js.
+The frontend sends single images to the backend for 3D model generation and renders the results using Three.js.
 
 ## Frontend Features Implemented
 
@@ -22,11 +30,11 @@ The frontend is now prepared to send single images to the backend for 3D model g
 - ✅ Proper lighting and camera setup
 - ✅ Auto-rotate enabled after model loads
 
-## Backend Integration Requirements
+## ✅ Backend Integration (COMPLETED)
 
 ### API Endpoint
 
-**Endpoint:** `POST http://localhost:8000/process`
+**Endpoint:** `POST http://localhost:8000/process` ✅ IMPLEMENTED
 
 **Request Format:** `multipart/form-data`
 
@@ -36,37 +44,36 @@ The frontend is now prepared to send single images to the backend for 3D model g
 - photoroom_api_key: String (user's Photoroom API key)
 ```
 
-### Expected Response
+### Backend Response Format
 
-The backend should return a JSON response with one of the following formats:
+The backend returns a JSON response in the following formats:
 
-#### Option 1: Direct URL to model file
+#### Success Response
 ```json
 {
   "success": true,
-  "model_url": "http://localhost:8000/models/output_model.ply",
-  "format": "ply",
+  "model_url": "http://localhost:8000/models/output_model.obj",
+  "format": "obj",
   "message": "Model generated successfully"
 }
 ```
 
-#### Option 2: Relative path to model file
-```json
-{
-  "success": true,
-  "model_path": "/output/model.ply",
-  "format": "ply",
-  "message": "Model generated successfully"
-}
-```
-
-#### Option 3: Error response
+#### Error Response
 ```json
 {
   "success": false,
   "error": "Error message describing what went wrong"
 }
 ```
+
+### Additional Backend Endpoints
+
+- `GET /` - Health check endpoint
+- `GET /health` - Detailed health and CUDA status
+- `POST /generate` - Multi-image generation endpoint
+- `GET /models/{filename}` - Serve generated 3D models ✅
+- `GET /download/{filename}` - Download generated files
+- `GET /demo` - Run demo with pre-loaded images
 
 ### Supported Model Formats
 - **PLY** (recommended) - Point cloud and mesh format
@@ -99,45 +106,90 @@ let apiKey = '';          // Photoroom API key
 let currentModel = null;  // Current 3D model in scene
 ```
 
-## Testing the Integration
+## ✅ Testing the Integration (SERVERS RUNNING)
 
-### 1. Without Backend (Current State)
-- Upload or select demo images
-- Preview displays correctly
-- Process button shows loading state
-- Error message displays when backend not available
+### How to Use the Application
 
-### 2. With Backend (Future)
-1. Start backend server on `localhost:8000`
-2. Ensure endpoint accepts POST to `/process`
-3. Return JSON with `model_url` or `model_path`
-4. Frontend will automatically load and display 3D model
+1. **Access the Frontend:**
+   - Open your browser and go to http://localhost:8080
 
-## Backend Development Notes
+2. **Enter Your Photoroom API Key:**
+   - Enter your Photoroom API key in the input field
+   - The key will be saved in local storage for future use
 
-### Recommended Workflow
-1. Accept single image upload
-2. Remove background using Photoroom API
-3. Run photogrammetry processing (COLMAP, etc.)
-4. Generate PLY or OBJ file
-5. Save to accessible location
-6. Return URL/path in JSON response
+3. **Select an Image:**
+   - Click "Select Image" to upload your own image, OR
+   - Click "👟 Try a Shoe" or "☕ Try a Mug" to use demo images
 
-### CORS Configuration
-If backend is on different port, ensure CORS headers are set:
-```python
-# Example for Flask
-from flask_cors import CORS
-CORS(app)
+4. **Generate 3D Model:**
+   - Click "Generate 3D Model" button
+   - The backend will:
+     - Remove the background using Photoroom API
+     - Generate a 3D model using TripoSR
+     - Return the model file
+
+5. **View the Result:**
+   - The 3D model will automatically load in the viewer
+   - Use your mouse to rotate and zoom the model
+   - The model will auto-rotate for better visualization
+
+### Server Status
+
+**Backend Server:**
+- Status: ✅ RUNNING
+- Port: 8000
+- CUDA: Enabled (NVIDIA GeForce RTX 4060 Laptop GPU)
+- Python environment: `/home/ryanreede/projects/photoroom-p-grammetry-poc/backend/venv`
+
+**Frontend Server:**
+- Status: ✅ RUNNING
+- Port: 8080
+- Type: Python HTTP server
+
+### To Restart the Servers:
+
+**Backend:**
+```bash
+cd /home/ryanreede/projects/photoroom-p-grammetry-poc/backend
+source venv/bin/activate
+python app.py
 ```
 
-### File Serving
-Backend should serve generated model files:
+**Frontend:**
+```bash
+cd /home/ryanreede/projects/photoroom-p-grammetry-poc/frontend
+python3 -m http.server 8080
+```
+
+## ✅ Backend Implementation Details
+
+### Workflow (IMPLEMENTED)
+1. ✅ Accept single image upload via `/process` endpoint
+2. ✅ Remove background using Photoroom API (optional)
+3. ✅ Run TripoSR for 3D reconstruction (GPU-accelerated)
+4. ✅ Generate OBJ file with mesh
+5. ✅ Save to `/tmp/reconstruction/` directory
+6. ✅ Return model URL in JSON response
+
+### CORS Configuration ✅
+CORS is properly configured in the backend:
 ```python
-# Example endpoint to serve model files
-@app.route('/models/<filename>')
-def serve_model(filename):
-    return send_from_directory('output_directory', filename)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+```
+
+### File Serving ✅
+Backend serves generated model files via:
+```python
+@app.get("/models/{filename}")
+async def serve_model(filename: str):
+    # Serves OBJ, PLY, MTL files from triposr_output directories
+    return FileResponse(path=file_path, media_type="model/obj")
 ```
 
 ## Error Handling
@@ -160,24 +212,50 @@ Potential improvements to consider:
 - [ ] Multiple camera angles/views
 - [ ] Quality settings (low/medium/high poly)
 
-## Example Backend Response Flow
+## ✅ Actual Backend Response Flow (IMPLEMENTED)
 
 ```
-1. Frontend sends image
+1. Frontend sends image via POST /process
    ↓
-2. Backend receives and validates
+2. Backend receives and validates (FastAPI)
    ↓
-3. Background removal (Photoroom API)
+3. Background removal (Photoroom API with rembg GPU fallback)
    ↓
-4. 3D reconstruction (COLMAP)
+4. 3D reconstruction (TripoSR with CUDA acceleration)
    ↓
-5. Model generation (PLY/OBJ)
+5. Model generation (OBJ format with mesh)
    ↓
-6. Save to /output/ directory
+6. Save to /tmp/reconstruction/request_*/triposr_output/
    ↓
-7. Return JSON with model_url
+7. Return JSON: {"success": true, "model_url": "http://localhost:8000/models/mesh.obj", "format": "obj"}
    ↓
-8. Frontend loads and renders model
+8. Frontend loads via GET /models/{filename}
+   ↓
+9. Three.js renders and displays model with auto-rotate
+```
+
+### Example API Interaction
+
+**Request:**
+```bash
+curl -X POST http://localhost:8000/process \
+  -F "image=@shoe.jpg" \
+  -F "photoroom_api_key=your_api_key_here"
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "model_url": "http://localhost:8000/models/mesh.obj",
+  "format": "obj",
+  "message": "Model generated successfully"
+}
+```
+
+**Then Frontend Loads:**
+```javascript
+load3DModel("http://localhost:8000/models/mesh.obj", "obj");
 ```
 
 ## Contact

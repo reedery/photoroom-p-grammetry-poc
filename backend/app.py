@@ -29,6 +29,10 @@ app.add_middleware(
 WORK_DIR = Path("/tmp/reconstruction")
 WORK_DIR.mkdir(parents=True, exist_ok=True)
 
+# Local output directory for easy access to generated models
+LOCAL_OUTPUT_DIR = Path(__file__).parent / "output"
+LOCAL_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+
 # Check CUDA availability at startup
 CUDA_AVAILABLE = torch.cuda.is_available()
 print(f"\n{'='*60}")
@@ -175,6 +179,174 @@ async def demo():
         "files_used": [p.name for p in images],
         "pipeline_result": result,
     }
+
+
+@app.post("/process")
+async def process_image(
+    image: UploadFile = File(...),
+    photoroom_api_key: Optional[str] = Form(None)
+):
+    """
+    Process a single image and generate a 3D model (frontend-compatible endpoint)
+    
+    Args:
+        image: Single image file
+        photoroom_api_key: Optional API key for background removal
+    
+    Returns:
+        JSON response with model_url and format for frontend
+    """
+    if not image:
+        raise HTTPException(status_code=400, detail="No image uploaded")
+    
+    # Read image content
+    content = await image.read()
+    image_data = [content]
+    
+    # Use environment variable for API key if not provided
+    api_key = photoroom_api_key or os.environ.get("PHOTOROOM_API_KEY")
+    
+    # Process image
+    print(f"\n{'='*60}")
+    print(f"Processing image: {image.filename}")
+    print(f"API Key provided: {bool(api_key)}")
+    print(f"{'='*60}")
+    
+    # Use TF32 on Ampere+ GPUs for better performance
+    if CUDA_AVAILABLE:
+        torch.set_float32_matmul_precision('high')
+    
+    work_dir = WORK_DIR / f"request_{os.getpid()}_{Path(image.filename).stem}"
+    pipeline = TripoSRPipeline(work_dir, verbose=True)
+    result = pipeline.run(image_data, api_key)
+    
+    if not result.get("success"):
+        error_msg = result.get("triposr", {}).get("error", "Unknown error during processing")
+        return JSONResponse(
+            status_code=500,
+            content={
+                "success": False,
+                "error": error_msg
+            }
+        )
+    
+    # Find the generated model file (GLB, OBJ, or PLY)
+    output_files = result.get("triposr", {}).get("files", [])
+    model_file = None
+    model_format = None
+    
+    # Prioritize GLB files (new format with textures)
+    for file_path in output_files:
+        if file_path.endswith('.glb'):
+            model_file = Path(file_path)
+            model_format = 'glb'
+            break
+    
+    # Fallback to OBJ or PLY if no GLB found
+    if not model_file:
+        for file_path in output_files:
+            if file_path.endswith('.obj'):
+                model_file = Path(file_path)
+                model_format = 'obj'
+                break
+            elif file_path.endswith('.ply'):
+                model_file = Path(file_path)
+                model_format = 'ply'
+                break
+    
+    if not model_file or not model_file.exists():
+        return JSONResponse(
+            status_code=500,
+            content={
+                "success": False,
+                "error": "No 3D model file generated"
+            }
+        )
+    
+    # Copy model and related files to local output directory
+    import shutil
+    from datetime import datetime
+    
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    local_filename = f"{Path(image.filename).stem}_{timestamp}.{model_format}"
+    local_model_path = LOCAL_OUTPUT_DIR / local_filename
+    
+    try:
+        # Copy the main model file
+        shutil.copy2(model_file, local_model_path)
+        print(f"✓ Saved model to: {local_model_path}")
+        
+        # Also copy any associated files (e.g., .mtl for .obj files)
+        if model_format == 'obj':
+            model_dir = model_file.parent
+            mtl_file = model_dir / model_file.name.replace('.obj', '.mtl')
+            if mtl_file.exists():
+                local_mtl_path = LOCAL_OUTPUT_DIR / f"{Path(image.filename).stem}_{timestamp}.mtl"
+                shutil.copy2(mtl_file, local_mtl_path)
+                print(f"✓ Saved material to: {local_mtl_path}")
+    except Exception as e:
+        print(f"Warning: Could not copy to local output: {e}")
+    
+    # Return URL to access the model
+    model_url = f"http://localhost:8000/models/{model_file.name}"
+    
+    return {
+        "success": True,
+        "model_url": model_url,
+        "format": model_format,
+        "message": "Model generated successfully",
+        "local_path": str(local_model_path) if local_model_path.exists() else None
+    }
+
+
+@app.get("/models/{filename}")
+async def serve_model(filename: str):
+    """
+    Serve generated 3D model files
+    """
+    # Search in work directory for the file (including subdirectories)
+    for result_dir in WORK_DIR.glob("*/triposr_output"):
+        # Check directly in triposr_output
+        file_path = result_dir / filename
+        if file_path.exists() and file_path.is_file():
+            # Determine media type based on extension
+            media_type = "application/octet-stream"
+            if filename.endswith('.glb'):
+                media_type = "model/gltf-binary"
+            elif filename.endswith('.obj'):
+                media_type = "model/obj"
+            elif filename.endswith('.ply'):
+                media_type = "model/ply"
+            elif filename.endswith('.mtl'):
+                media_type = "model/mtl"
+            
+            return FileResponse(
+                path=str(file_path),
+                filename=filename,
+                media_type=media_type
+            )
+        
+        # Also check in subdirectories (TripoSR creates numbered subdirs like 0/, 1/, etc.)
+        for subdir in result_dir.glob("*/"):
+            file_path = subdir / filename
+            if file_path.exists() and file_path.is_file():
+                media_type = "application/octet-stream"
+                if filename.endswith('.glb'):
+                    media_type = "model/gltf-binary"
+                elif filename.endswith('.obj'):
+                    media_type = "model/obj"
+                elif filename.endswith('.ply'):
+                    media_type = "model/ply"
+                elif filename.endswith('.mtl'):
+                    media_type = "model/mtl"
+                
+                return FileResponse(
+                    path=str(file_path),
+                    filename=filename,
+                    media_type=media_type
+                )
+    
+    raise HTTPException(status_code=404, detail="File not found")
 
 
 @app.get("/download/{filename}")

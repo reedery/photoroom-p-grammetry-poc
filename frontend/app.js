@@ -34,19 +34,29 @@ function initThreeJS() {
     // Renderer
     renderer = new THREE.WebGLRenderer({ antialias: true });
     renderer.setSize(400, 400);
+    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     container.appendChild(renderer.domElement);
     
-    // Lighting
-    const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+    // Enhanced lighting for better model visibility
+    const ambientLight = new THREE.AmbientLight(0xffffff, 1.6);
     scene.add(ambientLight);
     
-    const directionalLight1 = new THREE.DirectionalLight(0xffffff, 0.8);
+    // Main directional light
+    const directionalLight1 = new THREE.DirectionalLight(0xffffff, 1.4);
     directionalLight1.position.set(5, 5, 5);
+    directionalLight1.castShadow = true;
     scene.add(directionalLight1);
     
-    const directionalLight2 = new THREE.DirectionalLight(0xffffff, 0.4);
+    // Secondary directional light for fill
+    const directionalLight2 = new THREE.DirectionalLight(0xffffff, 0.8);
     directionalLight2.position.set(-5, -5, -5);
     scene.add(directionalLight2);
+    
+    // Additional rim light for better definition
+    const directionalLight3 = new THREE.DirectionalLight(0xffffff, 0.8);
+    directionalLight3.position.set(0, 5, -5);
+    scene.add(directionalLight3);
     
     // Controls
     controls = new THREE.OrbitControls(camera, renderer.domElement);
@@ -56,12 +66,14 @@ function initThreeJS() {
     controls.autoRotate = false;
     controls.autoRotateSpeed = 2;
     
+    
     // Add a placeholder cube initially
     addPlaceholderCube();
     
     // Animation loop
     animate();
 }
+
 
 function addPlaceholderCube() {
     const geometry = new THREE.BoxGeometry(2, 2, 2);
@@ -70,6 +82,8 @@ function addPlaceholderCube() {
         shininess: 100
     });
     const cube = new THREE.Mesh(geometry, material);
+    cube.castShadow = true;
+    cube.receiveShadow = true;
     currentModel = cube;
     scene.add(cube);
 }
@@ -79,7 +93,7 @@ function animate() {
     controls.update();
     
     // Rotate the placeholder cube slowly
-    if (currentModel && currentModel.geometry.type === 'BoxGeometry') {
+    if (currentModel && currentModel.geometry && currentModel.geometry.type === 'BoxGeometry') {
         currentModel.rotation.x += 0.005;
         currentModel.rotation.y += 0.005;
     }
@@ -88,7 +102,7 @@ function animate() {
 }
 
 // Load and display 3D model
-function load3DModel(modelUrl, format = 'ply') {
+function load3DModel(modelUrl, format = 'glb') {
     // Remove current model if exists
     if (currentModel) {
         scene.remove(currentModel);
@@ -104,7 +118,52 @@ function load3DModel(modelUrl, format = 'ply') {
     
     showStatus('Loading 3D model...', 'info');
     
-    if (format === 'ply') {
+    if (format === 'glb') {
+        const loader = new THREE.GLTFLoader();
+        loader.load(
+            modelUrl,
+            function (gltf) {
+                const model = gltf.scene;
+                
+                // Center and scale the model
+                const box = new THREE.Box3().setFromObject(model);
+                const center = new THREE.Vector3();
+                box.getCenter(center);
+                model.position.sub(center);
+                
+                // Rotate model 90 degrees around X-axis to fix orientation
+                model.rotation.x = -Math.PI / 2;
+                
+                const size = new THREE.Vector3();
+                box.getSize(size);
+                const maxDim = Math.max(size.x, size.y, size.z);
+                const scale = 3 / maxDim;
+                model.scale.set(scale, scale, scale);
+                
+                // Enable shadows for the model
+                model.traverse(function (child) {
+                    if (child.isMesh) {
+                        child.castShadow = true;
+                        child.receiveShadow = true;
+                    }
+                });
+                
+                currentModel = model;
+                scene.add(model);
+                
+                controls.autoRotate = true;
+                showStatus('3D model loaded successfully!', 'success');
+            },
+            function (xhr) {
+                console.log((xhr.loaded / xhr.total * 100) + '% loaded');
+            },
+            function (error) {
+                console.error('Error loading GLB:', error);
+                showStatus('Error loading 3D model', 'error');
+                addPlaceholderCube();
+            }
+        );
+    } else if (format === 'ply') {
         const loader = new THREE.PLYLoader();
         loader.load(
             modelUrl,
@@ -325,12 +384,12 @@ async function processImage() {
         // Load the 3D model
         // Assuming the backend returns a URL or path to the 3D model file
         if (result.model_url) {
-            // Determine format from URL or result
-            const format = result.format || 'ply';
+            // Determine format from URL or result (prioritize GLB)
+            const format = result.format || 'glb';
             load3DModel(result.model_url, format);
         } else if (result.model_path) {
             // If backend returns a relative path
-            load3DModel(result.model_path, result.format || 'ply');
+            load3DModel(result.model_path, result.format || 'glb');
         } else {
             throw new Error('No 3D model URL in response');
         }

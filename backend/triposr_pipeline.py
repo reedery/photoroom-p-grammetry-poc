@@ -64,6 +64,9 @@ class TripoSRPipeline:
         return saved
 
     def remove_backgrounds(self, api_key: Optional[str], image_paths: List[Path]) -> Tuple[List[Path], Optional[dict]]:
+        # TEMP
+        api_key = ""
+        
         if not api_key:
             self.log("Background removal skipped (no API key).")
             return image_paths, None
@@ -93,7 +96,16 @@ class TripoSRPipeline:
         if base_path:
             bases = [Path(base_path).resolve()]
         else:
-            bases = [Path(p).resolve() for p in default_paths if Path(p).exists()]
+            # Check paths with permission error handling
+            bases = []
+            for p in default_paths:
+                try:
+                    path = Path(p)
+                    if path.exists():
+                        bases.append(path.resolve())
+                except (PermissionError, OSError):
+                    # Skip paths we don't have permission to access
+                    continue
         
         for base in bases:
             candidates = [
@@ -119,35 +131,49 @@ class TripoSRPipeline:
             }
 
         self.output_dir.mkdir(parents=True, exist_ok=True)
+        # Try with texture baking first, but be prepared to fallback
         cmd = [
             "python",
             str(entry),
             *[str(p) for p in input_images],
             "--output-dir",
             str(self.output_dir),
-            # Skip texture baking for now due to CPU/GPU device mismatch in TripoSR
-            # The mesh (.obj) will still be generated successfully
-            # "--bake-texture",
+            "--bake-texture",
+            "--model-save-format",
+            "glb",
         ]
 
         self.log("Running TripoSR (this uses GPU if available)...")
         try:
             # Set up environment for headless OpenGL rendering
             env = os.environ.copy()
-            env["DISPLAY"] = ":99"
+            xvfb_proc = None
             
-            # Start Xvfb virtual display in background
-            xvfb_proc = subprocess.Popen(
-                ["Xvfb", ":99", "-screen", "0", "1024x768x24"],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
+            # Try to use Xvfb if available, otherwise use EGL for headless rendering
+            import shutil
+            if shutil.which("Xvfb"):
+                env["DISPLAY"] = ":99"
+                try:
+                    # Start Xvfb virtual display in background
+                    xvfb_proc = subprocess.Popen(
+                        ["Xvfb", ":99", "-screen", "0", "1024x768x24"],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                    )
+                    # Give Xvfb time to start
+                    import time
+                    time.sleep(0.2)
+                    self.log("Using Xvfb for headless rendering")
+                except Exception as e:
+                    self.log(f"Warning: Failed to start Xvfb: {e}")
+                    xvfb_proc = None
+            else:
+                # Use EGL for headless rendering (no X server needed)
+                env["PYOPENGL_PLATFORM"] = "egl"
+                self.log("Using EGL for headless rendering (Xvfb not available)")
             
             try:
-                # Give Xvfb time to start (reduced from 0.5s to 0.2s)
-                import time
-                time.sleep(0.2)
-                
+                self.log(f"Running command: {' '.join(cmd)}")
                 result = subprocess.run(
                     cmd,
                     check=True,
@@ -156,20 +182,80 @@ class TripoSRPipeline:
                     env=env,
                 )
             finally:
-                # Clean up Xvfb
-                xvfb_proc.terminate()
-                xvfb_proc.wait(timeout=2)
-            if self.verbose:
-                # Truncate logs to last lines
-                tail = "\n".join(result.stdout.splitlines()[-20:])
-                if tail.strip():
-                    self.log(tail)
+                # Clean up Xvfb if it was started
+                if xvfb_proc:
+                    xvfb_proc.terminate()
+                    try:
+                        xvfb_proc.wait(timeout=2)
+                    except:
+                        xvfb_proc.kill()
+            
+            # Always show full output for debugging
+            if result.stdout:
+                self.log("=== TripoSR STDOUT ===")
+                self.log(result.stdout)
+            if result.stderr:
+                self.log("=== TripoSR STDERR ===")
+                self.log(result.stderr)
         except subprocess.CalledProcessError as e:
-            return {"success": False, "error": e.stderr or str(e)}
+            # Check if it's a device mismatch error during texture baking
+            if "Expected all tensors to be on the same device" in str(e.stderr):
+                self.log("Texture baking failed due to device mismatch. Retrying without texture baking...")
+                
+                # Try again without texture baking
+                cmd_no_texture = [
+                    "python",
+                    str(entry),
+                    *[str(p) for p in input_images],
+                    "--output-dir",
+                    str(self.output_dir),
+                    "--model-save-format",
+                    "glb",
+                ]
+                
+                try:
+                    self.log(f"Retrying with command: {' '.join(cmd_no_texture)}")
+                    result = subprocess.run(
+                        cmd_no_texture,
+                        check=True,
+                        capture_output=True,
+                        text=True,
+                        env=env,
+                    )
+                    
+                    # Show output from successful retry
+                    if result.stdout:
+                        self.log("=== TripoSR Retry STDOUT ===")
+                        self.log(result.stdout)
+                    if result.stderr:
+                        self.log("=== TripoSR Retry STDERR ===")
+                        self.log(result.stderr)
+                        
+                except subprocess.CalledProcessError as retry_e:
+                    error_msg = f"TripoSR failed with exit code {retry_e.returncode} (retry without texture baking)"
+                    if retry_e.stdout:
+                        error_msg += f"\nSTDOUT: {retry_e.stdout}"
+                    if retry_e.stderr:
+                        error_msg += f"\nSTDERR: {retry_e.stderr}"
+                    self.log(f"TripoSR Retry Error: {error_msg}")
+                    return {"success": False, "error": error_msg}
+            else:
+                error_msg = f"TripoSR failed with exit code {e.returncode}"
+                if e.stdout:
+                    error_msg += f"\nSTDOUT: {e.stdout}"
+                if e.stderr:
+                    error_msg += f"\nSTDERR: {e.stderr}"
+                self.log(f"TripoSR Error: {error_msg}")
+                return {"success": False, "error": error_msg}
 
-        # Collect outputs (common outputs: .obj/.mtl/.png or .glb)
+        # Collect outputs (GLB format with baked textures)
         produced = sorted(self.output_dir.glob("**/*"))
         files = [str(p) for p in produced if p.is_file()]
+        
+        self.log(f"TripoSR completed. Found {len(files)} output files:")
+        for f in files:
+            self.log(f"  - {f}")
+        
         return {
             "success": True,
             "output_dir": str(self.output_dir),
